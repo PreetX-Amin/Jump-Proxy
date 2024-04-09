@@ -16,7 +16,7 @@ import (
 const (
 	SERVER_TYPE = "tcp"
 	SERVER_HOST = "localhost"
-	CHUNK_SIZE  = 32 * 1024
+	CHUNK_SIZE  = 64 * 1024
 )
 
 func checkError(err error, msg string) {
@@ -97,7 +97,7 @@ func Receive(reader func([]byte) (int, error)) (int, []byte, error) {
 		received += read
 		buffer = append(buffer, chunk[:read]...)
 
-		if read == 0 || read < CHUNK_SIZE || received > 1024*1024 {
+		if read == 0 || read < CHUNK_SIZE {
 			break
 		}
 	}
@@ -128,11 +128,12 @@ func portForward(reader func([]byte) (int, error), writer func([]byte) (int, err
 				return
 			}
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
 func startClient(destination string, port int, passphraseFile string) {
+	fmt.Println("Starting client...", destination, port)
 	connection, err := net.Dial(SERVER_TYPE, destination+":"+strconv.Itoa(port))
 	checkError(err, "Error connecting to server")
 	defer connection.Close()
@@ -191,6 +192,12 @@ func processClient(connection, forward net.Conn, passphrase string) {
 }
 
 func startServer(listen_port int, destination string, port int, passphraseFile string) {
+
+	// test destination connection
+	forward_test, err := net.Dial(SERVER_TYPE, destination+":"+strconv.Itoa(port))
+	checkError(err, "Error connecting to destination")
+	forward_test.Close()
+
 	fmt.Println("Starting server...")
 	server, err := net.Listen(SERVER_TYPE, ":"+strconv.Itoa(listen_port))
 	checkError(err, "Error starting server")
@@ -201,11 +208,6 @@ func startServer(listen_port int, destination string, port int, passphraseFile s
 	passphr, err := os.ReadFile(passphraseFile)
 	checkError(err, "Error reading passphrase from file")
 	passphrase := string(passphr)
-
-	// test destination connection
-	forward_test, err := net.Dial(SERVER_TYPE, destination+":"+strconv.Itoa(port))
-	checkError(err, "Error connecting to destination")
-	defer forward_test.Close()
 
 	for {
 		connection, err := server.Accept()
