@@ -10,17 +10,21 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const (
 	SERVER_TYPE = "tcp"
 	SERVER_HOST = "localhost"
-	CHUNK_SIZE  = 64 * 1024
+	CHUNK_SIZE  = 32 * 1024
+)
+
+var (
+	logFile *os.File
 )
 
 func checkError(err error, msg string) {
 	if err != nil {
+		logFile.WriteString("Fatal error: " + msg + "\n")
 		fmt.Fprintf(os.Stderr, "Fatal error: %s\n", msg)
 		panic(err)
 	}
@@ -83,13 +87,31 @@ func argumentParser() (string, int, bool, int, string) {
 	return destination, port, listen, listen_port, keyFile
 }
 
-func Receive(reader func([]byte) (int, error)) (int, []byte, error) {
+func ReadChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
+	// Read the data from the connection
+	buffer := make([]byte, CHUNK_SIZE)
+	read, err := reader(buffer)
+	if err != nil {
+		return read, buffer, err
+	}
+
+	// Get the length of the data and append it to the data first 4 bytes
+	dataLen := fmt.Sprintf("%05d", read)
+	buffer = append([]byte(dataLen), buffer...)
+
+	// Encrypt the data
+	encrypted := cryptography.Encrypt(string(buffer), cipher)
+
+	return len(encrypted), []byte(encrypted), nil
+}
+
+func readPacket(reader func([]byte) (int, error)) (int, []byte, error) {
 	// Read the data from the connection
 	var received int = 0
 	buffer := []byte{}
 	// Read the data in chunks.
 	for {
-		chunk := make([]byte, CHUNK_SIZE)
+		chunk := make([]byte, CHUNK_SIZE+33-received)
 		read, err := reader(chunk)
 		if err != nil {
 			return received, buffer, err
@@ -97,38 +119,75 @@ func Receive(reader func([]byte) (int, error)) (int, []byte, error) {
 		received += read
 		buffer = append(buffer, chunk[:read]...)
 
-		if read == 0 || read < CHUNK_SIZE {
+		if read == 0 || read < CHUNK_SIZE+33-received {
 			break
 		}
 	}
 	return received, buffer, nil
 }
 
-func portForward(reader func([]byte) (int, error), writer func([]byte) (int, error), crypto_func func(string, cipher.AEAD) string, wg *sync.WaitGroup, close *atomic.Bool, cipher *cipher.AEAD) {
+func ReadChunkAndDecript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
+	// Read the data from the connection
+	read, buffer, err := readPacket(reader)
+	if err != nil {
+		return read, buffer, err
+	}
 
+	// Decrypt the data
+	decrypted := cryptography.Decrypt(string(buffer), cipher)
+
+	// Get the length of the data
+	length, err := strconv.Atoi(decrypted[:5])
+	checkError(err, "Error converting length to integer")
+
+	return length, []byte(decrypted[5:]), nil
+}
+
+func portForwardEncrypt(reader func([]byte) (int, error), writer func([]byte) (int, error), wg *sync.WaitGroup, close *atomic.Bool, cipher *cipher.AEAD) {
 	// Read from the reader and write to the writer
-	var dBuffer string
 	for {
 		if close.Load() {
 			wg.Done()
 			return
 		} else {
-			mLen, buffer, err := Receive(reader)
+			mLen, buffer, err := ReadChunkAndEncript(reader, *cipher)
 			if err != nil {
 				close.Store(true)
 				wg.Done()
 				return
 			}
 
-			dBuffer = crypto_func(string(buffer[:mLen]), *cipher)
-			_, err = writer([]byte(dBuffer))
+			_, err = writer(buffer[:mLen])
 			if err != nil {
 				close.Store(true)
 				wg.Done()
 				return
 			}
 		}
-		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func portForwardDecrypt(reader func([]byte) (int, error), writer func([]byte) (int, error), wg *sync.WaitGroup, close *atomic.Bool, cipher *cipher.AEAD) {
+	// Read from the reader and write to the writer
+	for {
+		if close.Load() {
+			wg.Done()
+			return
+		} else {
+			mLen, buffer, err := ReadChunkAndDecript(reader, *cipher)
+			if err != nil {
+				close.Store(true)
+				wg.Done()
+				return
+			}
+
+			_, err = writer(buffer[:mLen])
+			if err != nil {
+				close.Store(true)
+				wg.Done()
+				return
+			}
+		}
 	}
 }
 
@@ -159,8 +218,8 @@ func startClient(destination string, port int, passphraseFile string) {
 
 	// Start the send and receive channels
 	wg.Add(2)
-	go portForward(os.Stdin.Read, connection.Write, cryptography.Encrypt, &wg, &close, &gcm)
-	go portForward(connection.Read, os.Stdout.Write, cryptography.Decrypt, &wg, &close, &gcm)
+	go portForwardEncrypt(os.Stdin.Read, connection.Write, &wg, &close, &gcm)
+	go portForwardDecrypt(connection.Read, os.Stdout.Write, &wg, &close, &gcm)
 	wg.Wait()
 }
 
@@ -185,8 +244,8 @@ func processClient(connection, forward net.Conn, passphrase string) {
 
 	// Start the send and receive channels
 	wg.Add(2)
-	go portForward(connection.Read, forward.Write, cryptography.Decrypt, &wg, &close, &gcm)
-	go portForward(forward.Read, connection.Write, cryptography.Encrypt, &wg, &close, &gcm)
+	go portForwardEncrypt(forward.Read, connection.Write, &wg, &close, &gcm)
+	go portForwardDecrypt(connection.Read, forward.Write, &wg, &close, &gcm)
 	wg.Wait()
 	fmt.Println("Connection closed : ", connection.RemoteAddr())
 }
@@ -225,8 +284,10 @@ func main() {
 
 	// Start the server
 	if listen {
+		logFile, _ = os.OpenFile("../jumproxy_server.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		startServer(listen_port, destination, port, keyFile)
 	} else {
+		logFile, _ = os.OpenFile("../jumproxy_client.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		startClient(destination, port, keyFile)
 	}
 }
