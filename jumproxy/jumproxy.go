@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/cipher"
+	"encoding/binary"
 	"fmt"
 	"jumproxy/cryptography"
 
@@ -87,6 +88,31 @@ func argumentParser() (string, int, bool, int, string) {
 	return destination, port, listen, listen_port, keyFile
 }
 
+func readPacket(reader func([]byte) (int, error)) (int, []byte, error) {
+	// Read the data from the connection
+	var received int = 0
+	buffer := []byte{}
+	// Read the data in chunks.
+	for {
+		chunk := make([]byte, CHUNK_SIZE+32-received)
+		read, err := reader(chunk)
+		if err != nil {
+			return received, buffer, err
+		}
+		received += read
+		buffer = append(buffer, chunk[:read]...)
+
+		if received == CHUNK_SIZE+32 {
+			break
+		}
+
+		if read == 0 {
+			return received, buffer, fmt.Errorf("EOF")
+		}
+	}
+	return received, buffer, nil
+}
+
 func ReadChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
 	// Read the data from the connection
 	buffer := make([]byte, CHUNK_SIZE)
@@ -96,34 +122,15 @@ func ReadChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (
 	}
 
 	// Get the length of the data and append it to the data first 4 bytes
-	dataLen := fmt.Sprintf("%05d", read)
-	buffer = append([]byte(dataLen), buffer...)
+	// dataLen := fmt.Sprintf("%05d", read)
+	byte_len := make([]byte, 4)
+	binary.LittleEndian.PutUint32(byte_len, uint32(read))
+	buffer = append(byte_len, buffer...)
 
 	// Encrypt the data
 	encrypted := cryptography.Encrypt(string(buffer), cipher)
 
 	return len(encrypted), []byte(encrypted), nil
-}
-
-func readPacket(reader func([]byte) (int, error)) (int, []byte, error) {
-	// Read the data from the connection
-	var received int = 0
-	buffer := []byte{}
-	// Read the data in chunks.
-	for {
-		chunk := make([]byte, CHUNK_SIZE+33-received)
-		read, err := reader(chunk)
-		if err != nil {
-			return received, buffer, err
-		}
-		received += read
-		buffer = append(buffer, chunk[:read]...)
-
-		if read == 0 || read < CHUNK_SIZE+33-received {
-			break
-		}
-	}
-	return received, buffer, nil
 }
 
 func ReadChunkAndDecript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
@@ -135,12 +142,14 @@ func ReadChunkAndDecript(reader func([]byte) (int, error), cipher cipher.AEAD) (
 
 	// Decrypt the data
 	decrypted := cryptography.Decrypt(string(buffer), cipher)
+	data := []byte(decrypted)
 
 	// Get the length of the data
-	length, err := strconv.Atoi(decrypted[:5])
+	byte_len := data[:4]
+	length := binary.LittleEndian.Uint32([]byte(byte_len))
 	checkError(err, "Error converting length to integer")
 
-	return length, []byte(decrypted[5:]), nil
+	return int(length), data[4:], nil
 }
 
 func portForwardEncrypt(reader func([]byte) (int, error), writer func([]byte) (int, error), wg *sync.WaitGroup, close *atomic.Bool, cipher *cipher.AEAD) {
