@@ -16,7 +16,7 @@ import (
 const (
 	SERVER_TYPE = "tcp"
 	SERVER_HOST = "localhost"
-	CHUNK_SIZE  = 32 * 1024
+	CHUNK_SIZE  = 64 * 1024
 )
 
 var (
@@ -88,32 +88,7 @@ func argumentParser() (string, int, bool, int, string) {
 	return destination, port, listen, listen_port, keyFile
 }
 
-func readPacket(reader func([]byte) (int, error)) (int, []byte, error) {
-	// Read the data from the connection
-	var received int = 0
-	buffer := []byte{}
-	// Read the data in chunks.
-	for {
-		chunk := make([]byte, CHUNK_SIZE+32-received)
-		read, err := reader(chunk)
-		if err != nil {
-			return received, buffer, err
-		}
-		received += read
-		buffer = append(buffer, chunk[:read]...)
-
-		if received == CHUNK_SIZE+32 {
-			break
-		}
-
-		if read == 0 {
-			return received, buffer, fmt.Errorf("EOF")
-		}
-	}
-	return received, buffer, nil
-}
-
-func ReadChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
+func readChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
 	// Read the data from the connection
 	buffer := make([]byte, CHUNK_SIZE)
 	read, err := reader(buffer)
@@ -121,55 +96,59 @@ func ReadChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (
 		return read, buffer, err
 	}
 
-	// Get the length of the data and append it to the data first 4 bytes
-	// dataLen := fmt.Sprintf("%05d", read)
-	byte_len := make([]byte, 4)
-	binary.LittleEndian.PutUint32(byte_len, uint32(read))
-	buffer = append(byte_len, buffer...)
-
 	// Encrypt the data
-	encrypted := cryptography.Encrypt(string(buffer), cipher)
+	encrypted := cryptography.Encrypt(string(buffer[:read]), cipher)
 
-	return len(encrypted), []byte(encrypted), nil
+	// Get the length of the data and append it to the data first 4 bytes
+	byte_len := make([]byte, 4)
+	binary.LittleEndian.PutUint32(byte_len, uint32(len(encrypted)))
+	buffer = append(byte_len, []byte(encrypted)...)
+
+	return len(buffer), buffer, nil
 }
 
-func ReadChunkAndDecript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
+func readChunkAndDecript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
 	// Read the data from the connection
-	read, buffer, err := readPacket(reader)
+	packet_len := make([]byte, 4)
+	read, err := reader(packet_len)
+	if err != nil {
+		return read, packet_len, err
+	}
+	if read == 0 {
+		return read, packet_len, fmt.Errorf("EOF: Error reading from connection")
+	}
+
+	// Get the length of the data
+	length := int(binary.LittleEndian.Uint32(packet_len))
+
+	// read the data
+	buffer := make([]byte, length)
+	read, err = reader(buffer)
 	if err != nil {
 		return read, buffer, err
 	}
 
 	// Decrypt the data
 	decrypted := cryptography.Decrypt(string(buffer), cipher)
-	data := []byte(decrypted)
 
-	// Get the length of the data
-	byte_len := data[:4]
-	length := binary.LittleEndian.Uint32([]byte(byte_len))
-	checkError(err, "Error converting length to integer")
-
-	return int(length), data[4:], nil
+	return len(decrypted), []byte(decrypted), nil
 }
 
 func portForwardEncrypt(reader func([]byte) (int, error), writer func([]byte) (int, error), wg *sync.WaitGroup, close *atomic.Bool, cipher *cipher.AEAD) {
 	// Read from the reader and write to the writer
+	defer wg.Done()
+	defer close.Store(true)
 	for {
 		if close.Load() {
-			wg.Done()
 			return
 		} else {
-			mLen, buffer, err := ReadChunkAndEncript(reader, *cipher)
+			mLen, buffer, err := readChunkAndEncript(reader, *cipher)
 			if err != nil {
-				close.Store(true)
-				wg.Done()
 				return
 			}
 
 			_, err = writer(buffer[:mLen])
 			if err != nil {
-				close.Store(true)
-				wg.Done()
 				return
 			}
 		}
@@ -178,22 +157,19 @@ func portForwardEncrypt(reader func([]byte) (int, error), writer func([]byte) (i
 
 func portForwardDecrypt(reader func([]byte) (int, error), writer func([]byte) (int, error), wg *sync.WaitGroup, close *atomic.Bool, cipher *cipher.AEAD) {
 	// Read from the reader and write to the writer
+	defer wg.Done()
+	defer close.Store(true)
 	for {
 		if close.Load() {
-			wg.Done()
 			return
 		} else {
-			mLen, buffer, err := ReadChunkAndDecript(reader, *cipher)
+			mLen, buffer, err := readChunkAndDecript(reader, *cipher)
 			if err != nil {
-				close.Store(true)
-				wg.Done()
 				return
 			}
 
 			_, err = writer(buffer[:mLen])
 			if err != nil {
-				close.Store(true)
-				wg.Done()
 				return
 			}
 		}
