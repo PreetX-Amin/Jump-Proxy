@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"jumproxy/cryptography"
 
+	"flag"
 	"net"
 	"os"
 	"strconv"
@@ -21,6 +22,9 @@ const (
 
 var (
 	logFile *os.File
+	keyFile = flag.String("k", "", "encription-key-file")
+	port    = flag.String("l", "", "listen port for server")
+	help    = flag.Bool("h", false, "help")
 )
 
 func checkError(err error, msg string) {
@@ -33,44 +37,29 @@ func checkError(err error, msg string) {
 
 func argumentParser() (string, int, bool, int, string) {
 	// Check the number of arguments
-	args := os.Args[1:]
-	if len(args) < 4 {
-		fmt.Println("Invalid input arguments: too few arguments")
+	flag.Parse()
+	if *help {
+		fmt.Println("Usage: ", os.Args[0], " -k <encription-key-file> [-l port] <destination> <port>")
+		os.Exit(0)
+	}
+
+	// Check if key file is provided
+	if *keyFile == "" {
+		fmt.Println("Invalid input arguments: key file is missing")
 		fmt.Println("Usage: ", os.Args[0], " -k <encription-key-file> [-l port] <destination> <port>")
 		os.Exit(1)
 	}
 
-	var keyFile, destination string
-	var listen bool = false
-	var port, listen_port int
-	var err error
-	// Check the key file
-	for i := 0; i < len(args); i++ {
-		if args[i] == "-k" {
-			if i+1 >= len(args) {
-				fmt.Println("Invalid input arguments: key file is missing")
-				fmt.Println("Usage: ", os.Args[0], " -k <encription-key-file> [-l port] <destination> <port>")
-				os.Exit(1)
-			}
-
-			keyFile = args[i+1]
-			args = append(args[:i], args[i+2:]...)
-			break
-		}
+	// Check if listen port is provided
+	listen := false
+	listen_port, err := strconv.Atoi(*port)
+	if *port != "" {
+		checkError(err, "Invalid port number for listening")
+		listen = true
 	}
 
-	// Check the listen port
-	for i := 0; i < len(args); i++ {
-		if args[i] == "-l" {
-			listen = true
-			listen_port, err = strconv.Atoi(args[i+1])
-			checkError(err, "Invalid port number for listening")
-			args = append(args[:i], args[i+2:]...)
-			break
-		}
-	}
-
-	// assert only 2 arguments left
+	// Get the destination and port
+	args := flag.Args()
 	if len(args) != 2 {
 		if len(args) < 2 {
 			fmt.Println("Invalid input arguments: destination and/or port missing")
@@ -81,11 +70,11 @@ func argumentParser() (string, int, bool, int, string) {
 		os.Exit(1)
 	}
 
-	destination = args[0]
-	port, err = strconv.Atoi(args[1])
+	destination := args[0]
+	port, err := strconv.Atoi(args[1])
 	checkError(err, "Invalid destination port number")
 
-	return destination, port, listen, listen_port, keyFile
+	return destination, port, listen, listen_port, *keyFile
 }
 
 func readChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
