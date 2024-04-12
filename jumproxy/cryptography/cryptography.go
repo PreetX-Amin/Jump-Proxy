@@ -47,24 +47,24 @@ func GenerateAESGCMCipher(passphrase string, salt []byte) (cipher.AEAD, error) {
 	return gcm, nil
 }
 
-func Encrypt(plaintext string, gcm cipher.AEAD) string {
+func Encrypt(plaintext []byte, gcm cipher.AEAD) []byte {
 	nonce := make([]byte, gcm.NonceSize())
 	_, err := rand.Read(nonce)
 	checkError(err, "Error generating nonce")
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 
-	return string(ciphertext)
+	return ciphertext
 }
 
-func Decrypt(ciphertext string, gcm cipher.AEAD) string {
+func Decrypt(ciphertext []byte, gcm cipher.AEAD) []byte {
 	nonceSize := gcm.NonceSize()
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
 
-	plaintext, err := gcm.Open(nil, []byte(nonce), []byte(ciphertext), nil)
+	plaintext, err := gcm.Open(nil, []byte(nonce), ciphertext, nil)
 	if err != nil {
 		fmt.Println("Error decrypting message")
-		return ""
+		return nil
 	}
 
-	return string(plaintext)
+	return plaintext
 }

@@ -97,14 +97,14 @@ func readChunkAndEncript(reader func([]byte) (int, error), cipher cipher.AEAD) (
 	}
 
 	// Encrypt the data
-	encrypted := cryptography.Encrypt(string(buffer[:read]), cipher)
+	encrypted := cryptography.Encrypt(buffer[:read], cipher)
 
 	// Get the length of the data and append it to the data first 4 bytes
 	byte_len := make([]byte, 4)
 	binary.LittleEndian.PutUint32(byte_len, uint32(len(encrypted)))
-	buffer = append(byte_len, []byte(encrypted)...)
+	encrypted = append(byte_len, encrypted...)
 
-	return len(buffer), buffer, nil
+	return len(encrypted), encrypted, nil
 }
 
 func readChunkAndDecript(reader func([]byte) (int, error), cipher cipher.AEAD) (int, []byte, error) {
@@ -129,9 +129,9 @@ func readChunkAndDecript(reader func([]byte) (int, error), cipher cipher.AEAD) (
 	}
 
 	// Decrypt the data
-	decrypted := cryptography.Decrypt(string(buffer), cipher)
+	decrypted := cryptography.Decrypt(buffer, cipher)
 
-	return len(decrypted), []byte(decrypted), nil
+	return len(decrypted), decrypted, nil
 }
 
 func portForwardEncrypt(reader func([]byte) (int, error), writer func([]byte) (int, error), wg *sync.WaitGroup, close *atomic.Bool, cipher *cipher.AEAD) {
