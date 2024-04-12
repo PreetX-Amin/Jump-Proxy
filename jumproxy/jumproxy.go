@@ -21,7 +21,6 @@ const (
 )
 
 var (
-	logFile *os.File
 	keyFile = flag.String("k", "", "encription-key-file")
 	port    = flag.String("l", "", "listen port for server")
 	help    = flag.Bool("h", false, "help")
@@ -29,7 +28,6 @@ var (
 
 func checkError(err error, msg string) {
 	if err != nil {
-		logFile.WriteString("Fatal error: " + msg + "\n")
 		fmt.Fprintf(os.Stderr, "Fatal error: %s\n", msg)
 		panic(err)
 	}
@@ -258,10 +256,8 @@ func main() {
 
 	// Start the server
 	if listen {
-		logFile, _ = os.OpenFile("../jumproxy_server.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		startServer(listen_port, destination, port, keyFile)
 	} else {
-		logFile, _ = os.OpenFile("../jumproxy_client.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		startClient(destination, port, keyFile)
 	}
 }
