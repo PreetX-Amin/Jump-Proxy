@@ -1,9 +1,3 @@
-CSE508: Network Security, Spring 2024
-Name: Preet Amin | Student ID: 115360499
-
-Homework 3: Jump Proxy
--------------------------------------------------------------------------------
-
 # Introduction
 
 This Go module implements a simple TCP port-forwarding proxy with encryption 
